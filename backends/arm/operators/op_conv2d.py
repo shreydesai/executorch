@@ -11,7 +11,10 @@ from executorch.backends.arm.operators.node_visitor import (
     register_node_visitor,
 )
 from executorch.backends.arm.tosa_mapping import TosaArg
-from executorch.backends.arm.tosa_quant_utils import build_rescale_conv_output
+from executorch.backends.arm.tosa_quant_utils import (
+    build_rescale_conv_output,
+    get_quant_node_args,
+)
 from executorch.backends.arm.tosa_utils import (
     build_reshape,
     getNodeArgs,
@@ -87,11 +90,15 @@ class Conv2dVisitor(NodeVisitor):
             dilation_attr[1],
         )
 
+        input_zp = (
+            get_quant_node_args(node.all_input_nodes[0])[1] if is_quant_node else 0
+        )
+
         attr.ConvAttribute(
             pad=pad_attr,
             stride=stride_attr,
             dilation=dilation_attr,
-            input_zp=0,
+            input_zp=input_zp,
             weight_zp=0,
             local_bound=False,
         )
@@ -202,7 +209,7 @@ class Conv2dVisitor(NodeVisitor):
             # Get scale_factor from input, weight, and output.
             _, input_scale, _, _, _, _ = getNodeArgs(node.args[0])
             _, weight_scale, _, _, _, _ = getNodeArgs(node.args[1])
-            _, output_scale, _, _, _, _ = getNodeArgs(list(node.users)[0])
+            _, output_scale, output_zp, _, _, _ = getNodeArgs(list(node.users)[0])
 
             conv2d_res = build_rescale_conv_output(
                 tosa_graph,
@@ -211,6 +218,7 @@ class Conv2dVisitor(NodeVisitor):
                 input_scale,
                 weight_scale,
                 output_scale,
+                output_zp,
             )
 
         tosa_graph.addOperator(

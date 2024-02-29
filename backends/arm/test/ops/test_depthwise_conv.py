@@ -1,4 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
 # Copyright 2024 Arm Limited and/or its affiliates.
 # All rights reserved.
 #
@@ -8,10 +7,11 @@
 import logging
 import unittest
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 from executorch.backends.arm.test import common
+from executorch.backends.arm.test.ops.test_conv import Conv2d
 from executorch.backends.arm.test.test_models import TosaProfile
 from executorch.backends.arm.test.tester.arm_tester import ArmBackendSelector, ArmTester
 from parameterized import parameterized
@@ -21,23 +21,80 @@ logger.setLevel(logging.INFO)
 
 torch.manual_seed(42)
 
+dw_conv2d_3x3_1x3x256x256_gp3_st1 = Conv2d(
+    in_channels=3,
+    out_channels=3,
+    kernel_size=(3, 3),
+    stride=(1, 1),
+    groups=3,
+    padding=0,
+    width=256,
+    height=256,
+    batches=1,
+)
 
-class TestSimpleAdd(unittest.TestCase):
-    class Add(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
+dw_conv2d_3x3_1x4x256x256_gp4_st1 = Conv2d(
+    in_channels=4,
+    out_channels=8,
+    kernel_size=(3, 3),
+    stride=(1, 1),
+    groups=4,
+    padding=0,
+    width=256,
+    height=256,
+    batches=1,
+)
 
-        def forward(self, x):
-            return x + x
+dw_conv2d_3x3_2x8x198x198_gp8_st3 = Conv2d(
+    in_channels=8,
+    out_channels=16,
+    kernel_size=(3, 3),
+    stride=3,
+    groups=8,
+    padding=0,
+    width=198,
+    height=198,
+    batches=2,
+)
 
-    class Add2(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
+dw_conv2d_3x3_1x4x256x256_gp4_nobias = Conv2d(
+    in_channels=4,
+    out_channels=8,
+    kernel_size=(3, 3),
+    stride=1,
+    groups=4,
+    bias=False,
+    width=256,
+    height=256,
+    batches=1,
+)
 
-        def forward(self, x, y):
-            return x + y
+two_dw_conv2d = Conv2d(
+    nbr_conv=2,
+    width=64,
+    height=64,
+    in_channels=[4, 8],
+    out_channels=[8, 24],
+    kernel_size=[(3, 3), (3, 3)],
+    stride=[1, 1],
+    padding=[0, 0],
+    groups=[4, 8],
+    bias=[True, True],
+    batches=2,
+)
 
-    def _test_add_tosa_MI_pipeline(
+# Shenanigan to get a nicer output when test fails.
+testsuite = [
+    ("3x3_1x3x256x256_gp3_st1", dw_conv2d_3x3_1x3x256x256_gp3_st1),
+    ("3x3_1x4x256x256_gp4_st1", dw_conv2d_3x3_1x4x256x256_gp4_st1),
+    ("3x3_2x8x198x198_gp8_st3", dw_conv2d_3x3_2x8x198x198_gp8_st3),
+    ("3x3_1x4x256x256_gp4_nobias", dw_conv2d_3x3_1x4x256x256_gp4_nobias),
+    ("two_dw_conv2d", two_dw_conv2d),
+]
+
+
+class TestDepthwiseConv2D(unittest.TestCase):
+    def _test_dw_conv2d_tosa_MI_pipeline(
         self, module: torch.nn.Module, test_data: Tuple[torch.Tensor]
     ):
         tester = (
@@ -48,8 +105,6 @@ class TestSimpleAdd(unittest.TestCase):
                 backend=ArmBackendSelector.TOSA,
             )
             .export()
-            .check_count({"torch.ops.aten.add.Tensor": 1})
-            .check_not(["torch.ops.quantized_decomposed"])
             .to_edge()
             .partition()
             .check_count({"torch.ops.higher_order.executorch_call_delegate": 1})
@@ -62,7 +117,7 @@ class TestSimpleAdd(unittest.TestCase):
                 "TOSA ref model tool not installed, skip numerical correctness tests"
             )
 
-    def _test_add_tosa_BI_pipeline(
+    def _test_dw_conv2d_tosa_BI_pipeline(
         self, module: torch.nn.Module, test_data: Tuple[torch.Tensor]
     ):
         tester = (
@@ -74,14 +129,11 @@ class TestSimpleAdd(unittest.TestCase):
             )
             .quantize()
             .export()
-            .check_count({"torch.ops.aten.add.Tensor": 1})
-            .check(["torch.ops.quantized_decomposed"])
             .to_edge()
             .partition()
             .check_count({"torch.ops.higher_order.executorch_call_delegate": 1})
             .to_executorch()
         )
-
         if common.TOSA_REF_MODEL_INSTALLED:
             tester.run_method().compare_outputs(qtol=1)
         else:
@@ -89,7 +141,7 @@ class TestSimpleAdd(unittest.TestCase):
                 "TOSA ref model tool not installed, skip numerical correctness tests"
             )
 
-    def _test_add_u55_BI_pipeline(
+    def _test_dw_conv2d_u55_BI_pipeline(
         self, module: torch.nn.Module, test_data: Tuple[torch.Tensor]
     ):
         (
@@ -101,48 +153,23 @@ class TestSimpleAdd(unittest.TestCase):
             )
             .quantize()
             .export()
-            .check_count({"torch.ops.aten.add.Tensor": 1})
-            .check(["torch.ops.quantized_decomposed"])
             .to_edge()
             .partition()
             .check_count({"torch.ops.higher_order.executorch_call_delegate": 1})
             .to_executorch()
         )
 
-    def test_add_tosa_MI(self):
-        test_data = (torch.randn(4, 4, 4),)
-        self._test_add_tosa_MI_pipeline(self.Add(), test_data)
+    @parameterized.expand(testsuite)
+    def test_dw_conv2d_tosa_MI(self, test_name, model):
+        self._test_dw_conv2d_tosa_MI_pipeline(model, model.get_inputs())
 
-    @parameterized.expand(
-        [
-            (torch.ones(5),),  # test_data
-            (3 * torch.ones(8),),
-        ]
-    )
-    def test_add_tosa_BI(self, test_data: Optional[Tuple[torch.Tensor]]):
-        test_data = (test_data,)
-        self._test_add_tosa_BI_pipeline(self.Add(), test_data)
+    @parameterized.expand(testsuite)
+    def test_dw_conv2d_tosa_BI(self, test_name, model):
+        self._test_dw_conv2d_tosa_BI_pipeline(model, model.get_inputs())
 
-    @unittest.skipIf(
-        not common.VELA_INSTALLED,
-        "There is no point in running U55 tests if the Vela tool is not installed",
-    )
-    def test_add_u55_BI(self):
-        test_data = (3 * torch.ones(5),)
-        self._test_add_u55_BI_pipeline(self.Add(), test_data)
-
-    def test_add2_tosa_MI(self):
-        test_data = (torch.randn(1, 1, 4, 4), torch.randn(1, 1, 4, 1))
-        self._test_add_tosa_MI_pipeline(self.Add2(), test_data)
-
-    def test_add2_tosa_BI(self):
-        test_data = (torch.ones(1, 1, 4, 4), torch.ones(1, 1, 4, 1))
-        self._test_add_tosa_BI_pipeline(self.Add2(), test_data)
-
-    @unittest.skipIf(
-        not common.VELA_INSTALLED,
-        "There is no point in running U55 tests if the Vela tool is not installed",
-    )
-    def test_add2_u55_BI(self):
-        test_data = (torch.ones(1, 1, 4, 4), torch.ones(1, 1, 4, 1))
-        self._test_add_u55_BI_pipeline(self.Add2(), test_data)
+    @parameterized.expand(testsuite)
+    @unittest.skip("vela --accelerator-config=ethos-u55-128 out.tosa fails!")
+    # TODO: All tests fail. Fixme! I get this:
+    # Warning: TRANSPOSE 'aten_convolution_default' is not supported on the NPU
+    def test_dw_conv2d_u55_BI(self, test_name, model):
+        self._test_dw_conv2d_u55_BI_pipeline(model, model.get_inputs())
