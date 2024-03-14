@@ -261,6 +261,8 @@ class LlamaEdgeManager:
         metadata = self._get_metadata()
 
         with torch.nn.attention.sdpa_kernel([SDPBackend.MATH]), torch.no_grad():
+            print("before capture:", self.model)
+            self.model(*self.example_inputs)
             m = capture_pre_autograd_graph(
                 self.model, self.example_inputs, dynamic_shapes=dynamic_shape
             )

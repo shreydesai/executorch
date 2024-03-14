@@ -211,7 +211,9 @@ class Attention(nn.Module):
         bsz, seqlen, _ = x.shape
 
         # QKV
+        # TODO: re-enable
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        # xq, xk, xv = x, x, x
         # We need view_copy elimination
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
@@ -461,9 +463,9 @@ class Transformer(nn.Module):
             freqs_cos = self.freqs_cos[sp : sp + seqlen]
             freqs_sin = self.freqs_sin[sp : sp + seqlen]
         else:
-            assert (
-                start_pos is None and cache_k is None and cache_v is None
-            ), "Caches and start_pos are unused when use_kv_cache is False"
+            # assert (
+            #     start_pos is None and cache_k is None and cache_v is None
+            # ), "Caches and start_pos are unused when use_kv_cache is False"
             freqs_cos = self.freqs_cos[:seqlen]
             freqs_sin = self.freqs_sin[:seqlen]
 
